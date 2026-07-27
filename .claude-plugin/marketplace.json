@@ -1,0 +1,15 @@
+{
+  "name": "eriks-briedis",
+  "description": "Personal marketplace hosting flowkit, a shared Claude Code toolkit for AI-assisted engineering workflows.",
+  "owner": {
+    "name": "Eriks Briedis",
+    "email": "eriks.briedis@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "flowkit",
+      "source": "./",
+      "description": "Shared Claude Code toolkit for AI-assisted engineering: preflight specs, PR review triage, code review, and comment cleanup."
+    }
+  ]
+}

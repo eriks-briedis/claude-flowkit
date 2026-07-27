@@ -1,0 +1,9 @@
+# Local Claude Code state — per-user, not part of the plugin
+.claude/
+
+# Handoff scaffolding, not shipped
+BUILD_PROMPT.md
+
+# macOS SMB/Finder droppings
+._*
+.DS_Store
