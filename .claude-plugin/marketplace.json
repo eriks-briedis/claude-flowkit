@@ -9,7 +9,7 @@
     {
       "name": "flowkit",
       "source": "./",
-      "description": "Shared Claude Code toolkit for AI-assisted engineering: preflight specs, PR review triage, code review, and comment cleanup."
+      "description": "Shared Claude Code toolkit for AI-assisted engineering: preflight specs, PR review triage, code review, addressing PR feedback, and comment cleanup."
     }
   ]
 }
