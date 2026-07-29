@@ -1,6 +1,6 @@
 # flowkit
 
-A shared collection of Claude Code commands and skills built to help engineering teams get more out of AI-assisted development. It isn't tied to any single workflow — today it covers turning underspecified tasks into a scoped implementation plan before code gets touched, triaging and reviewing pull requests (fast single-pass or thorough multi-agent), and keeping comments and diffs clean before merge. New commands and skills get added as the team finds more places AI assistance pays off.
+A shared collection of Claude Code commands and skills built to help engineering teams get more out of AI-assisted development. It isn't tied to any single workflow — today it covers turning underspecified tasks into a scoped implementation plan before code gets touched, both sides of pull request review (triaging and reviewing other people's PRs, then working through the feedback left on your own), and keeping comments and diffs clean before merge. New commands and skills get added as the team finds more places AI assistance pays off.
 
 Packaged as a plugin so a team can install and update these as a single unit, instead of copying files into `~/.claude/commands` by hand.
 
@@ -33,6 +33,7 @@ Packaged as a plugin so a team can install and update these as a single unit, in
 - `gh` CLI, authenticated against the target repo's GitHub remote (`gh auth status`)
 - `git`, `jq`
 - Run from inside the target git repository — these commands operate on "the current repo/branch," they don't take a repo argument
+- `/address-pr-comments` additionally needs an open PR for the branch you're on, since it resolves the PR from the current branch rather than taking a number
 
 ## Notes on state
 
@@ -53,7 +54,7 @@ After a new version is pushed:
 
 ```bash
 claude plugin marketplace update eriks-briedis
-claude plugin update flowkit
+claude plugin update flowkit@eriks-briedis
 ```
 
 (Claude Code also re-syncs marketplaces periodically in the background; the above forces it immediately.) A restart of your Claude Code session is required for the update to take effect.
