@@ -173,9 +173,9 @@ One entry per finding, grouped by severity, after the memory reconciliation filt
 Each finding, in every group above, uses this exact format:
 
 ````
-**`path/to/file.ext:LINE`** — _Severity_
+**`path/to/file.ext:LINE`** · _Severity_
 
-> Friendly comment text. Phrase as a gentle question or soft suggestion, not a command. Be specific about what you noticed and what you'd suggest. Keep it short — 1–3 sentences.
+> Friendly comment text. Phrase as a gentle question or soft suggestion, not a command. Be specific about what you noticed and what you'd suggest. Keep it short, 1 to 3 sentences.
 
 ```suggestion
 // optional: concrete code suggestion if a small inline change captures the fix
@@ -183,13 +183,17 @@ Each finding, in every group above, uses this exact format:
 ````
 
 Tone rules:
-- Open with collaborative phrasing: "What do you think about…", "Could we…", "I wonder if…", "Small thought —", "Heads up —".
+- Open with collaborative phrasing: "What do you think about…", "Could we…", "I wonder if…", "Small thought,", "Heads up,".
 - Prefer "we" over "you". No imperatives ("Fix this", "You must").
 - For High-Risk, stay friendly but make the stakes clear.
 - For Low-Risk, make it explicitly optional ("totally a nit").
 - One comment per finding. Multi-line ranges use `path/to/file.ext:START-END`.
 - Omit the ` ```suggestion ` block when a fix isn't obvious or would span too much context.
 - For Uncertain findings, replace the suggestion with what needs verifying and how.
+
+**Backtick every code token in the comment body.** These get pasted into GitHub, where a bare identifier renders as prose and an `_` or `*` inside a name is swallowed as emphasis. Function and variable names, types, file paths, flags, package names, and literal values (`null`, `0`, `""`, status codes) all go in backticks. Multi-line code goes in a fenced block, not inline.
+
+**Run the `humanize` skill over every comment body before printing.** These are the words a colleague reads on their PR, and stock AI phrasing reads badly there. No em dashes, no "It's not just X, it's Y", no "Additionally"/"Furthermore" openers, varied sentence length. It rewrites phrasing only: file paths, line numbers, severities, and code stay exactly as generated.
 
 ---
 

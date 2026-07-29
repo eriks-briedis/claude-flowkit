@@ -248,18 +248,22 @@ Every live item gets an explicit reply decision. Never silently skip one — "no
 - memory says you already posted a reply and there's been no new comment since
 - your own earlier reply in the thread already answers it and nothing has changed
 
-Format each drafted reply in `/review-quick`'s tone — collaborative, brief, "we" over "you" — with the item's URL so it's easy to find on GitHub:
+**Backtick every code token in a reply.** These get pasted into GitHub, where a bare identifier renders as prose and an `_` or `*` inside a name is swallowed as emphasis. Function and variable names, types, file paths, flags, and literal values (`null`, `0`, `""`) all go in backticks. Multi-line code goes in a fenced block, not inline.
+
+**Run the `humanize` skill over every drafted reply before printing.** A reply to a reviewer is the most obviously human-authored text this command produces, and stock AI phrasing is conspicuous there. No em dashes, no "Great catch!" openers, no "I hope this helps", no "Let me know if you have any questions", varied sentence length. It rewrites phrasing only: file paths, identifiers, URLs, and code stay exactly as generated.
+
+Format each drafted reply in `/review-quick`'s tone, collaborative, brief, "we" over "you", with the item's URL so it's easy to find on GitHub:
 
 ````
 **T2** — https://github.com/org/repo/pull/839#discussion_r123456
 
-> Good catch — added an early return when `items` is empty, plus a test for that case in `baz.spec.ts`.
+> Good catch. Added an early return when `items` is empty, plus a test for that case in `baz.spec.ts`.
 ````
 
 ````
 **T4** — https://github.com/org/repo/pull/839#discussion_r123999
 
-> You're right, it was still recomputing on resize. Moved the call to init so it runs once — the resize path now reuses the cached value. Worth a second look at the resize branch specifically.
+> You're right, it was still recomputing on resize. Moved the call to `init` so it runs once, and the resize path now reuses the cached value. Worth a second look at the resize branch specifically.
 ````
 
 ```

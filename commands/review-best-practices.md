@@ -186,6 +186,10 @@ Bulleted list of files included in the review. Mark each as `[committed]`, `[unc
 
 ## Files Skipped
 Bulleted list of files excluded, with one-line reason each.
+
+Formatting rules for the whole report:
+- Backtick every code token: function, variable, type, and component names, file paths, flags, package names, and literal values (`null`, `0`, `""`). Bare identifiers lose their meaning once this is pasted anywhere that renders markdown, and `_`/`*` inside a name gets eaten as emphasis. Multi-line code goes in a fenced block with a language tag.
+- Run the `humanize` skill over the prose fields (Problem, Why it matters, Suggested fix) before output. No em dashes, no stock AI phrasing, varied sentence length. It rewrites wording only: file paths, line ranges, severities, dimensions, and code stay exactly as generated.
 </output_format>
 
 <calibration>

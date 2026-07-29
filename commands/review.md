@@ -255,9 +255,9 @@ For each:
 Render every actionable finding as an inline-style PR comment, ordered by realistic impact (highest first). Each comment must follow this exact format:
 
 ````
-**`path/to/file.ext:LINE`** — _Severity_
+**`path/to/file.ext:LINE`** · _Severity_
 
-> Friendly comment text. Phrase as a gentle question or soft suggestion, not a command. Be specific about what you noticed and what you'd suggest. Keep it short — 1–3 sentences.
+> Friendly comment text. Phrase as a gentle question or soft suggestion, not a command. Be specific about what you noticed and what you'd suggest. Keep it short, 1 to 3 sentences.
 
 ```suggestion
 // optional: concrete code suggestion if a small inline change captures the fix
@@ -265,19 +265,23 @@ Render every actionable finding as an inline-style PR comment, ordered by realis
 ````
 
 Tone and phrasing rules for the comment text:
-- Open with collaborative phrasing such as "What do you think about…", "Could we…", "I wonder if…", "Small thought —", "Heads up —", "Just flagging…", "Would it be worth…".
+- Open with collaborative phrasing such as "What do you think about…", "Could we…", "I wonder if…", "Small thought,", "Heads up,", "Just flagging…", "Would it be worth…".
 - Avoid imperatives like "Fix this", "You must", "Change this to". Prefer "we" over "you".
 - Acknowledge intent when relevant ("I can see what this is going for, but…").
-- Be specific about the concern in plain language — no jargon dumps.
+- Be specific about the concern in plain language, no jargon dumps.
 - For High-Risk items, stay friendly but make the stakes clear ("this one's worth a second look before merging because…").
 - For Low-Risk items, make it explicitly optional ("totally a nit, feel free to ignore").
 - One comment per finding. Multi-line ranges use `path/to/file.ext:START-END`.
 - Omit the ` ```suggestion ` block when a code-level fix isn't obvious or would span too much context.
 
+**Backtick every code token in the comment body.** These get pasted into GitHub, where a bare identifier renders as prose and an `_` or `*` inside a name is swallowed as emphasis. Function and variable names, types, file paths, flags, package names, and literal values (`null`, `0`, `""`, status codes) all go in backticks. Multi-line code goes in a fenced block, not inline.
+
+**Run the `humanize` skill over every comment body before printing.** These are the words a colleague reads on their PR, and stock AI phrasing reads badly there. No em dashes, no "It's not just X, it's Y", no "Additionally"/"Furthermore" openers, varied sentence length. It rewrites phrasing only: file paths, line numbers, severities, and code stay exactly as generated.
+
 Example:
 
 ````
-**`src/api/payments.ts:142`** — _Medium_
+**`src/api/payments.ts:142`** · _Medium_
 
 > What do you think about wrapping this `await stripe.charges.create(...)` in a try/catch? If Stripe times out we'd currently bubble a 500 to the client with no log line, which makes it tricky to diagnose later. Happy to pair on the error shape if useful.
 
@@ -293,9 +297,9 @@ try {
 ````
 
 ````
-**`src/utils/date.ts:18`** — _Low_
+**`src/utils/date.ts:18`** · _Low_
 
-> Small thought — `formatDt` reads a bit cryptic next to the other helpers in this file. Could we rename it to `formatDateTime` to match `formatDate` above? Totally a nit, feel free to ignore.
+> Small thought: `formatDt` reads a bit cryptic next to the other helpers in this file. Could we rename it to `formatDateTime` to match `formatDate` above? Totally a nit, feel free to ignore.
 ````
 
 ---

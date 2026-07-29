@@ -22,11 +22,19 @@ Packaged as a plugin so a team can install and update these as a single unit, in
 | Skill | Purpose |
 |---|---|
 | `preflight-spec` | Auto-loads for vague/underspecified coding tasks. Turns the ask into a short goal/non-goals/acceptance-criteria/verification spec and gets confirmation before editing production code. |
+| `humanize` | Rewrites user-facing prose so it reads like a person wrote it: no em dashes, no AI stock phrasing, varied sentence rhythm, every fact and number preserved. Invoke it directly on any text, or let the review commands call it, since they now run every PR comment and reply through it before printing. |
 
 **Scripts** (`scripts/`)
 
 - `pr-needs-review.sh` — deterministic backing script for `/pr-review-loop`'s "which PRs need me" step. Run from inside a `gh`-authenticated repo; outputs JSON. Kept as a plain script (not re-derived by the model each run) because the filtering logic here is pure timestamp/state comparison, not judgment.
 - `pr-comment-threads.sh` — same idea for `/address-pr-comments`: fetches the unresolved comment threads, review summaries, and PR comments on the current branch's PR, excluding resolved threads and your own comments, and outputs JSON with a stable id per item. Uses GraphQL `pullRequest.reviewThreads` because thread *resolution state* isn't available from `gh pr view --json comments` or the REST comments endpoint — which is precisely why it's a script and not something the model reassembles each run.
+
+## Generated comment style
+
+`/review`, `/review-quick`, `/review-best-practices`, and `/address-pr-comments` all produce text that gets pasted into GitHub, so they share two output rules:
+
+- **Code tokens are backticked.** Identifiers, file paths, flags, types, and literal values go in backticks so GitHub renders them as code. A bare `some_name` in prose loses its underscores to markdown emphasis.
+- **Every comment body goes through the `humanize` skill before printing.** Phrasing only; paths, line numbers, severities, and code are untouched.
 
 ## Requirements
 
