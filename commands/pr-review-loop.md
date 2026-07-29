@@ -1,12 +1,33 @@
 ---
-description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull PR description/discussion from gh, ask the user only for the ticket title/description, check out the branch, and run /review-quick
+description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull PR description/discussion from gh, ask the user only for the ticket title/description, check out the branch, and run /review-quick or the full multi-agent /review-pr
+argument-hint: "[quick|full] (default: quick, with a per-PR recommendation)"
 ---
 
 ## Role
 
-You are triaging the user's GitHub PR review queue in the current repository. For every open PR that genuinely needs the user's attention — either they've never reviewed it, or it has new commits since their last review — you assemble that PR's review context (PR description and discussion from `gh`, ticket title/description from the user), check out the branch locally, and run the `/review-quick` skill against it with that context passed inline.
+You are triaging the user's GitHub PR review queue in the current repository. For every open PR that genuinely needs the user's attention — either they've never reviewed it, or it has new commits since their last review — you assemble that PR's review context (PR description and discussion from `gh`, ticket title/description from the user), check out the branch locally, and run a review against it with that context passed inline.
+
+Two review depths are available per PR:
+
+| Depth | Command | What it is |
+|---|---|---|
+| **quick** (default) | `/review-quick` | Single pass, no subagents. Fast enough to triage a queue. Remembers per-PR what you already chose not to comment on. |
+| **full** | `/review-pr` | Multi-agent pass — bugs, regressions, quality, risk, test coverage, ticket/discussion alignment. Slower and more expensive. For high-risk or unusually large PRs. |
+
+Both take the ticket context inline and both read lint/test/build results from the PR's CI instead of running anything locally. Neither writes `ticket.md`, and neither posts to GitHub.
 
 This command only works from inside a git repo with `gh` authenticated against the relevant GitHub remote.
+
+---
+
+## Invocation
+
+`$ARGUMENTS` sets the *default* depth for the whole run:
+
+- *(empty)* or `quick` → default to quick, and recommend full per-PR when the sizing check in 2e says so
+- `full` → default to full for every PR
+
+The default is never binding: step 2f always confirms the depth with the user for the PR at hand, and they can override either way.
 
 ---
 
@@ -27,6 +48,8 @@ Present the resulting list to the user before looping, e.g.:
 #838  [never reviewed]                 ABC-2844: Remove chevron from secondary button
 ...
 ```
+
+Say which default depth the run is using (`quick` unless `$ARGUMENTS` says `full`) when you present the list.
 
 If the array is empty, say so and stop — there is nothing to loop over.
 
@@ -55,26 +78,9 @@ gh pr view <number> --json body,comments,reviews
 - `body` → PR description
 - `comments[].body` and `reviews[].body` → prior discussion on this PR (skip empty review bodies from plain approvals/rejections with no comment)
 
-### 2d. Ask the user for the ticket's title and description only
+### 2d. Check out the branch
 
-The only thing not visible to `gh` is the Jira-side ask — what the ticket actually wants. Ask for just that, nothing more — but restate the PR number and URL (from 2a) right above the ask, so the user has it at hand to pull up the ticket without scrolling back:
-
-```
-#<number> — <url>
-
-Title:
-Description:
-```
-
-Wait for the reply — do not fabricate or infer it.
-
-### 2e. Hand the assembled context to the review — skip `ticket.md` entirely
-
-Do **not** read or write `ticket.md` for this loop. It may hold unrelated context (the user's own in-progress ticket, used by a standalone `/review` or another command in their setup) — overwriting it every loop iteration would clobber that.
-
-Instead, pass the assembled context (ticket Title/Description from 2d, PR description/discussion from 2c) straight into the `/review-quick` invocation in step 2g, as inline context in the same turn — no file round-trip.
-
-### 2f. Check out the branch
+Do this before asking the user anything, so the sizing check in 2e has a real diff to look at and the user is only interrupted once.
 
 Before switching branches, run `git status`. If the working tree has uncommitted changes, **stop the entire loop and tell the user** — do not stash, commit, or discard anything on their behalf. Let them clean up and re-run the command.
 
@@ -87,17 +93,71 @@ git pull --ff-only
 
 `gh pr checkout` reuses a local branch from a prior loop run if one exists, which can leave it behind the PR's actual head — the explicit `git pull` guarantees the review runs against the latest commits. Use `--ff-only`: if it fails (local branch diverged from remote), stop and surface that to the user rather than merging or rebasing on their behalf.
 
-### 2g. Run the review
+### 2e. Size up the PR and pick a recommended depth
 
-Invoke the `review-quick` skill (equivalent to running `/review-quick`) against the now-checked-out branch, passing the context assembled in 2e inline instead of pointing it at `ticket.md`. It pulls CI status from the PR itself rather than re-running lint/tests locally, and prints findings pre-formatted as paste-ready GitHub PR comments.
+Start from the `$ARGUMENTS` default, then check whether this particular PR argues for full:
 
-Display the findings directly in the conversation. Do **not** post the review to GitHub (no `gh pr review`, `gh pr comment`, or similar) — this command is display-only by design, and `/review-quick` is display-only by its own constraints too.
+```
+BASE=$(gh pr view <number> --json baseRefName --jq .baseRefName)
+git diff --stat $(git merge-base HEAD origin/$BASE)..HEAD
+```
 
-`/review-quick` remembers past passes on the same PR (`~/.claude/pr-review-memory/`) — findings you saw before and chose not to comment on won't be re-flagged unless they've gotten worse, and it will ask you which findings you're posting this pass before handing control back here. Let that question resolve before moving to 2h.
+Take the base from the PR itself rather than assuming `main` — plenty of PRs target a release or feature branch.
 
-### 2h. Pause before continuing
+Recommend **full** when any of these hold:
 
-After showing the findings, stop and ask the user whether to proceed to the next PR in the queue, skip it, or stop the loop entirely. Do not auto-advance.
+- Roughly 400+ changed lines, or 20+ changed files
+- The diff touches high-risk surface: auth/permissions, billing/payments, database migrations, cryptography, public API contracts, or anything that handles user-supplied input at a trust boundary
+- CI is red on the PR (`gh pr view --json statusCheckRollup`) — a failing pipeline plus a large diff is worth the deeper pass
+- The PR is back for re-review (`status: "updated"`) and the new commits are themselves substantial, not a one-line fix
+
+Otherwise recommend **quick**. Small, single-subsystem PRs are exactly what quick mode is for, and spending six agents on a 30-line diff buys nothing.
+
+State the recommendation in one line with the reason, e.g. `→ suggesting full: 640 changed lines across 23 files, touches src/auth/`.
+
+### 2f. Ask the user for the ticket title/description and confirm the depth
+
+The only thing not visible to `gh` is the Jira-side ask — what the ticket actually wants. Ask for just that plus the depth confirmation, in one message, nothing more. Restate the PR number and URL (from 2a) right above the ask so the user can pull the ticket up without scrolling back:
+
+```
+#<number> — <url>
+<one-line size/risk summary from 2e>
+
+Title:
+Description:
+
+Review depth: [quick] / full   ← suggesting <quick|full> because <reason>
+```
+
+Wait for the reply — do not fabricate or infer the ticket content, and do not pick the depth for them when they've answered with only the ticket text. If they give the ticket and say nothing about depth, take the recommendation and say which one you're running.
+
+### 2g. Hand the assembled context to the review — skip `ticket.md` entirely
+
+Do **not** read or write `ticket.md` for this loop. It may hold unrelated context (the user's own in-progress ticket) — overwriting it every loop iteration would clobber that. Both review commands accept the context inline for exactly this reason.
+
+Pass the assembled context (ticket Title/Description from 2f, PR description/discussion from 2c) straight into the review invocation in 2h, inline in the same turn — no file round-trip.
+
+### 2h. Run the review at the chosen depth
+
+**quick** → invoke the `review-quick` skill (equivalent to `/review-quick`) against the checked-out branch with the 2g context inline.
+
+**full** → invoke the `review-pr` skill (equivalent to `/review-pr`) the same way. It fans out to parallel agents, including one that checks the diff against the ticket's acceptance criteria and any unanswered points in the PR discussion, so pass the discussion from 2c along with the ticket text.
+
+Either way:
+
+- The review reads lint/test/build results from the PR's CI. Neither command runs the project's lint, test, or build locally, and you must not run them here on their behalf.
+- Display the findings directly in the conversation. Do **not** post to GitHub (no `gh pr review`, `gh pr comment`, or similar) — this loop is display-only by design, and both review commands are display-only by their own constraints.
+
+Depth-specific handoff:
+
+- `/review-quick` remembers past passes on the same PR (`~/.claude/pr-review-memory/`) — findings you saw before and chose not to comment on won't be re-flagged unless they've gotten worse, and it asks which findings you're posting this pass before handing control back. Let that question resolve before moving to 2i.
+- `/review-pr` reads that same memory but never suppresses on it; it annotates repeats instead, and doesn't write to it. So a full pass after a quick pass will re-surface things you already dismissed, marked as such. That's deliberate — the point of the deeper pass is to look again.
+
+If the user asked for quick and the review itself comes back saying the diff is too large or too risky for a single pass, offer to re-run this PR at full depth before moving on. Don't re-run it silently.
+
+### 2i. Pause before continuing
+
+After showing the findings, stop and ask the user whether to proceed to the next PR in the queue, re-run this one at the other depth, skip ahead, or stop the loop entirely. Do not auto-advance.
 
 ---
 
@@ -105,8 +165,8 @@ After showing the findings, stop and ask the user whether to proceed to the next
 
 When the loop ends (list exhausted or user stops early):
 
-- Check out the branch the user started on (recorded in 2f).
-- Summarize which PRs were reviewed, which were skipped, and which remain in the queue for next time.
+- Check out the branch the user started on (recorded in 2d).
+- Summarize which PRs were reviewed and at which depth, which were skipped, and which remain in the queue for next time.
 
 ---
 
@@ -115,5 +175,8 @@ When the loop ends (list exhausted or user stops early):
 - Never run `gh pr review`, `gh pr comment`, `git push`, `git commit`, or `gh pr create` as part of this loop.
 - Never stash, commit, or discard uncommitted work when switching branches — if the working tree is dirty, stop and tell the user.
 - Never invent ticket content the user hasn't provided.
-- Never skip the pause in 2h, even if the user seems eager to move fast — confirm each time.
+- Never read or write `ticket.md` — ticket context is asked for in 2f and passed inline, every iteration.
+- Never run the project's lint, test, or build commands. Lint/test/build status comes from the PR's CI, via the review command.
+- Never skip the pause in 2i, even if the user seems eager to move fast — confirm each time.
+- Never escalate a PR to full depth without asking, and never quietly downgrade a PR the user asked to review at full depth.
 - Never edit `${CLAUDE_PLUGIN_ROOT}/scripts/pr-needs-review.sh`'s output by hand-reasoning through `gh`/`jq` instead — if the script errors or seems wrong, fix the script, don't route around it token-by-token.

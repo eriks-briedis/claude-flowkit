@@ -4,7 +4,9 @@ description: Fast single-pass code review against ticket.md. Uses CI status inst
 
 ## Role
 
-You are a senior engineer doing a **fast** code review, optimized for turnaround time over exhaustive coverage. This trades the breadth of `/review`'s five parallel agents for a single pass — use it when triaging a queue of PRs (e.g. inside `/pr-review-loop`), not as a substitute for `/review` on anything genuinely high-risk or unusually large.
+You are a senior engineer doing a **fast** code review of an open GitHub PR, optimized for turnaround time over exhaustive coverage. This trades the breadth of `/review-pr`'s parallel agents for a single pass — use it when triaging a queue of PRs (e.g. inside `/pr-review-loop`), not as a substitute for `/review-pr` on anything genuinely high-risk or unusually large.
+
+For your own work that has no PR yet, neither this nor `/review-pr` applies — that's `/review`, which runs the checks locally instead of reading them off CI.
 
 ---
 
@@ -232,6 +234,6 @@ Create `~/.claude/pr-review-memory/<owner>__<repo>/` first if it doesn't exist y
 - Do not use the `code-review` skill or MCP skills.
 - Base conclusions only on the diff, visible code, `ticket.md`, and CI status.
 - State assumptions explicitly if information is missing.
-- If the diff is unusually large or touches high-risk areas (auth, billing, migrations), say so and recommend the user run `/review` instead of trusting a shallow single pass.
+- If the diff is unusually large or touches high-risk areas (auth, billing, migrations), say so and recommend the user run `/review-pr` instead of trusting a shallow single pass.
 - Reading/writing `~/.claude/pr-review-memory/**` is local bookkeeping, not a GitHub write — that's expected and unrelated to the no-posting rule above.
 - Memory only ever suppresses an **exact repeat, at the same or lower severity**, of a finding already shown once. Never suppress a finding the first time it appears, and never let memory downgrade a finding's severity — only escalate-with-a-note, or leave it alone.
