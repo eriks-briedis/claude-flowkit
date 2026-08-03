@@ -1,5 +1,5 @@
 ---
-description: Fast single-pass code review against ticket.md. Uses CI status instead of re-running lint/tests locally, prints findings pre-formatted as copy/paste-ready GitHub PR comments (never posts them itself), and remembers across passes which findings you chose not to comment on so they aren't re-flagged unless they get worse
+description: Fast single-pass code review against ticket.md. Uses CI status instead of re-running lint/tests locally, reads the PR's existing inline review threads so it doesn't re-raise points already made, prints findings pre-formatted as copy/paste-ready GitHub PR comments (never posts them itself), and remembers across passes which findings you chose not to comment on so they aren't re-flagged unless they get worse
 ---
 
 ## Role
@@ -31,11 +31,36 @@ When in doubt, classify lower.
 
 ## Context to Load First
 
-1. If the invocation already included ticket/PR context inline (e.g. `/pr-review-loop` passes ticket title/description plus the PR's own description and discussion pulled from `gh`), use that directly — do not also read or write `ticket.md` in this case.
+Two separate things: what the ticket asked for, and what has already been said on the PR.
+
+### Ticket context
+
+1. If the invocation already included ticket context inline (e.g. `/pr-review-loop` passes ticket title/description), use that directly — do not also read or write `ticket.md` in this case.
 2. Otherwise, locate and read `ticket.md`.
    - Search the repo if not in root.
    - Use it to understand intent, acceptance criteria, constraints, edge cases, scope.
 3. If neither inline context nor `ticket.md` is available, state that and continue using only the diff and visible code.
+
+### PR discussion
+
+If `/pr-review-loop` already passed the PR's description, inline threads, and comments inline, use those and skip the fetch. Otherwise pull them yourself, before reading the diff:
+
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-threads.sh
+```
+
+No argument — it resolves the PR from the branch you're on. It returns `description`, `inline_threads[]`, `review_bodies[]`, and `pr_comments[]`.
+
+`inline_threads[]` is the part that matters most and the part that used to be missing here. Each thread carries `path`, `line`, `is_resolved`, `is_outdated`, `authored_by_me`, the `diff_hunk` it was anchored to, and every reply. Read them all before generating findings:
+
+- A thread on the same code you're about to comment on means the point is already made. That's the "Already raised on this PR" section below, not a fresh comment.
+- A **resolved** thread is a claim that something was handled. Worth a glance at whether the current head actually handles it.
+- An **outdated** thread means the code moved under it; the reviewer's point often still stands.
+- `authored_by_me: true` is your own comment from a previous round. On a PR that came back for re-review, that's the first thing to check against the new commits.
+
+`gh pr view --json body,comments,reviews` is not a substitute — its `reviews[]` nodes carry only the summary body typed above the line comments, never the line comments themselves.
+
+If the script fails because there's no PR for this branch, you're in the wrong command: `/review` is the pre-PR one. Say so and stop.
 
 ---
 
@@ -139,6 +164,22 @@ One line per suppressed item, no full comment formatting — it's a transparency
 
 ---
 
+## Reconcile Against Existing Threads
+
+Run this **after** the memory reconciliation above, on whatever findings survived it. Memory is your private record of past passes; the inline threads are what is publicly on the PR. They answer different questions and a finding can be caught by either.
+
+For each remaining finding, check it against `inline_threads[]`: same file, an overlapping or nearby line range, and — this is the part that matters — the same underlying point. Two comments on the same line about different things are not a match. A thread saying "this can be null" and a finding saying "this can be null" are, even if the line numbers drifted.
+
+- **No thread matches.** Render it normally in Findings.
+- **A thread matches.** Move it to the "Already raised on this PR" section instead. Don't render it as a paste-ready comment — the comment already exists on the PR, and pasting a second one adds noise to a thread the author is already working through. For each, note the thread author, the line, whether it's resolved or outdated, and one line on whether the current head appears to address it.
+- **A thread matches but you now assess the issue as materially worse than the thread describes** — the reviewer flagged a nit and you can see it's a crash — render it in Findings *as well*, with a line saying which thread it extends. That's a genuine addition to the conversation, not a duplicate.
+
+Read the thread's replies before deciding. A thread where the author already answered "out of scope, tracked in ABC-123" is settled, and re-raising it is exactly the noise this step exists to prevent. Say so in the section rather than dropping it silently.
+
+Threads are read-only context. Never write to the memory file on their behalf, and never let a thread suppress a finding from the memory rollup or vice versa — the two reconciliation steps stay independent.
+
+---
+
 ## Output Format
 
 ### Ticket Alignment
@@ -199,6 +240,28 @@ Tone rules:
 
 ---
 
+### Already raised on this PR
+
+Findings that an existing inline thread already covers, per the thread reconciliation above. Plain bullets, no comment formatting — nothing here is meant to be pasted anywhere.
+
+```
+- `path/to/file.ext:LINE` — @author already raised this (unresolved). <One line: what they said, and whether the current head answers it.>
+```
+
+Include the thread's state (`unresolved` / `resolved` / `outdated`) and use `you` in place of `@author` for your own threads from a previous round. Order by severity of your matching finding, highest first.
+
+Omit this section entirely when nothing matched. If the PR has no inline threads at all, say so in one line instead — on a PR that's back for re-review, "no inline discussion yet" is itself worth knowing.
+
+Example:
+
+```
+- `src/checkout.ts:88` — @dana already asked about the `null` case (unresolved). Matches my Medium finding; head hasn't changed since, so no new comment needed.
+- `src/cart.ts:31` — @sam raised this, thread resolved by the author. The guard at line 34 looks like it covers it.
+- `src/api/rates.ts:12` — you flagged this last round (outdated, the function moved to line 47). Still unhandled there.
+```
+
+---
+
 ### Overall Assessment
 
 Regression Risk: **Low / Medium / High**
@@ -215,12 +278,15 @@ After presenting the findings, ask directly:
 Which of these are you posting as PR comments? (list them, say "all", or say "none")
 ```
 
+Only the findings you rendered as comments are candidates. Nothing in "Already raised on this PR" is — there's nothing to paste.
+
 Wait for the answer, then write (or update) the memory file resolved earlier:
 
 - Every finding rendered this pass that the user says they're posting → `status: "posted"`.
 - Every finding rendered this pass the user does **not** select → `status: "not_posted"`.
 - Every finding suppressed by the reconciliation step → carry its existing `status` forward unchanged; just bump `times_seen` and `last_seen_commit`/`last_seen_at`.
 - Any finding present in the prior memory file that didn't reproduce at all this pass (code changed, issue genuinely fixed) → drop it from the file entirely. Don't keep tracking resolved issues.
+- Every finding moved to "Already raised on this PR" → **don't record it at all.** The thread on GitHub is the record, and the script re-reads it deterministically every pass. A memory copy would be a second source of truth for the same fact, and it's the one that goes stale when the thread gets resolved.
 
 Create `~/.claude/pr-review-memory/<owner>__<repo>/` first if it doesn't exist yet.
 
@@ -230,9 +296,10 @@ Create `~/.claude/pr-review-memory/<owner>__<repo>/` first if it doesn't exist y
 
 - Single pass only. No Task-tool subagents, no parallel review agents, no consolidation step.
 - Never run tests or lint locally — read CI status via `gh pr view`/`gh pr checks` instead.
-- **Human-in-the-loop only: never post anything to GitHub.** No `gh pr review`, `gh pr comment`, no API POSTs. This command's entire job is to print comments the user copies and pastes themselves.
+- **Human-in-the-loop only: never post anything to GitHub.** No `gh pr review`, `gh pr comment`, no API POSTs, and no replying to or resolving an inline thread. Threads are pulled to read. This command's entire job is to print comments the user copies and pastes themselves.
 - Do not use the `code-review` skill or MCP skills.
-- Base conclusions only on the diff, visible code, `ticket.md`, and CI status.
+- Base conclusions only on the diff, visible code, the resolved ticket context, the PR discussion, and CI status.
+- Never hand-roll the discussion fetch with `gh pr view --json body,comments,reviews` or ad-hoc `jq` against the REST comments endpoint. The first drops every inline comment; the second drops resolution state. Use the script.
 - State assumptions explicitly if information is missing.
 - If the diff is unusually large or touches high-risk areas (auth, billing, migrations), say so and recommend the user run `/review-pr` instead of trusting a shallow single pass.
 - Reading/writing `~/.claude/pr-review-memory/**` is local bookkeeping, not a GitHub write — that's expected and unrelated to the no-posting rule above.

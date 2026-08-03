@@ -1,5 +1,5 @@
 ---
-description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull PR description/discussion from gh, ask the user only for the ticket title/description, check out the branch, and run /review-quick or the full multi-agent /review-pr
+description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull the PR description plus every inline review thread and comment from gh, ask the user only for the ticket title/description, check out the branch, and run /review-quick or the full multi-agent /review-pr
 argument-hint: "[quick|full] (default: quick, with a per-PR recommendation)"
 ---
 
@@ -72,11 +72,19 @@ Extract a Jira-style ticket key from the PR title using a pattern like `[A-Z][A-
 `gh` already has this — don't ask the user for it:
 
 ```
-gh pr view <number> --json body,comments,reviews
+${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-threads.sh <number>
 ```
 
-- `body` → PR description
-- `comments[].body` and `reviews[].body` → prior discussion on this PR (skip empty review bodies from plain approvals/rejections with no comment)
+It returns one JSON object:
+
+- `description` → the PR body
+- `inline_threads[]` → every line-level review thread, each with `path`, `line`, `is_resolved`, `is_outdated`, `authored_by_me`, the `diff_hunk` it was anchored to, and the full reply chain. Nothing is filtered out — resolved threads, outdated threads, and threads you opened yourself all come back, flagged.
+- `review_bodies[]` → review summary text (empty approvals are already dropped)
+- `pr_comments[]` → the PR conversation
+
+**Do not substitute `gh pr view --json body,comments,reviews` for this.** That was the old fetch here and it silently returned nothing from the inline threads — `reviews[]` carries only the summary body a reviewer typed above their line comments, not the line comments themselves. Inline threads are where most of a review actually happens, so reviewing without them means re-raising points a colleague already made and missing the ones the author answered with "good catch, fixed in abc123."
+
+If `truncated` has any `true` in it, say so when you present the findings — the PR has more discussion than one page and something may be missing.
 
 ### 2d. Check out the branch
 
@@ -98,11 +106,10 @@ git pull --ff-only
 Start from the `$ARGUMENTS` default, then check whether this particular PR argues for full:
 
 ```
-BASE=$(gh pr view <number> --json baseRefName --jq .baseRefName)
-git diff --stat $(git merge-base HEAD origin/$BASE)..HEAD
+git diff --stat $(git merge-base HEAD origin/<base_ref from 2c>)..HEAD
 ```
 
-Take the base from the PR itself rather than assuming `main` — plenty of PRs target a release or feature branch.
+Take the base from the PR itself — 2c already returned it as `base_ref` — rather than assuming `main`. Plenty of PRs target a release or feature branch.
 
 Recommend **full** when any of these hold:
 
@@ -110,6 +117,7 @@ Recommend **full** when any of these hold:
 - The diff touches high-risk surface: auth/permissions, billing/payments, database migrations, cryptography, public API contracts, or anything that handles user-supplied input at a trust boundary
 - CI is red on the PR (`gh pr view --json statusCheckRollup`) — a failing pipeline plus a large diff is worth the deeper pass
 - The PR is back for re-review (`status: "updated"`) and the new commits are themselves substantial, not a one-line fix
+- The PR carries a lot of open inline discussion — say 5+ unresolved threads in `inline_threads` from 2c, or unresolved threads on the high-risk surface above. Checking a head against a pile of open requests is Agent 6's job and quick mode does it in a single pass.
 
 Otherwise recommend **quick**. Small, single-subsystem PRs are exactly what quick mode is for, and spending six agents on a 30-line diff buys nothing.
 
@@ -135,17 +143,22 @@ Wait for the reply — do not fabricate or infer the ticket content, and do not 
 
 Do **not** read or write `ticket.md` for this loop. It may hold unrelated context (the user's own in-progress ticket) — overwriting it every loop iteration would clobber that. Both review commands accept the context inline for exactly this reason.
 
-Pass the assembled context (ticket Title/Description from 2f, PR description/discussion from 2c) straight into the review invocation in 2h, inline in the same turn — no file round-trip.
+Pass the assembled context straight into the review invocation in 2h, inline in the same turn — no file round-trip:
+
+- ticket Title/Description from 2f
+- `description`, `review_bodies`, and `pr_comments` from 2c
+- **`inline_threads` from 2c, verbatim** — each one with its `path`, `line`, resolved/outdated flags, and comment bodies. Don't summarise them down to a sentence: the review needs the actual words on the actual lines to tell "this was already raised" from "this is new." Both review commands know to skip their own fetch when this arrives inline, so dropping it here means it never gets read at all.
 
 ### 2h. Run the review at the chosen depth
 
 **quick** → invoke the `review-quick` skill (equivalent to `/review-quick`) against the checked-out branch with the 2g context inline.
 
-**full** → invoke the `review-pr` skill (equivalent to `/review-pr`) the same way. It fans out to parallel agents, including one that checks the diff against the ticket's acceptance criteria and any unanswered points in the PR discussion, so pass the discussion from 2c along with the ticket text.
+**full** → invoke the `review-pr` skill (equivalent to `/review-pr`) the same way. It fans out to parallel agents, including one that checks the diff against the ticket's acceptance criteria and any unanswered points in the PR discussion, so pass the whole of 2c — inline threads included — along with the ticket text.
 
 Either way:
 
 - The review reads lint/test/build results from the PR's CI. Neither command runs the project's lint, test, or build locally, and you must not run them here on their behalf.
+- Both commands split their output: findings worth a new comment, and an **Already raised on this PR** section for findings an existing inline thread covers. On a PR back for re-review, expect the second section to carry real weight — that's the point of pulling the threads.
 - Display the findings directly in the conversation. Do **not** post to GitHub (no `gh pr review`, `gh pr comment`, or similar) — this loop is display-only by design, and both review commands are display-only by their own constraints.
 
 Depth-specific handoff:
@@ -172,11 +185,11 @@ When the loop ends (list exhausted or user stops early):
 
 ## Constraints
 
-- Never run `gh pr review`, `gh pr comment`, `git push`, `git commit`, or `gh pr create` as part of this loop.
+- Never run `gh pr review`, `gh pr comment`, `git push`, `git commit`, or `gh pr create` as part of this loop. Replying to or resolving an existing inline thread counts as posting — the threads are pulled to read, never to answer.
 - Never stash, commit, or discard uncommitted work when switching branches — if the working tree is dirty, stop and tell the user.
 - Never invent ticket content the user hasn't provided.
 - Never read or write `ticket.md` — ticket context is asked for in 2f and passed inline, every iteration.
 - Never run the project's lint, test, or build commands. Lint/test/build status comes from the PR's CI, via the review command.
 - Never skip the pause in 2i, even if the user seems eager to move fast — confirm each time.
 - Never escalate a PR to full depth without asking, and never quietly downgrade a PR the user asked to review at full depth.
-- Never edit `${CLAUDE_PLUGIN_ROOT}/scripts/pr-needs-review.sh`'s output by hand-reasoning through `gh`/`jq` instead — if the script errors or seems wrong, fix the script, don't route around it token-by-token.
+- Never replace either helper script (`pr-needs-review.sh`, `pr-review-threads.sh`) with hand-reasoned `gh`/`jq` calls — if one errors or seems wrong, fix the script, don't route around it token-by-token. For the threads script in particular, the obvious-looking `gh pr view --json body,comments,reviews` substitute drops every inline comment on the PR without erroring.

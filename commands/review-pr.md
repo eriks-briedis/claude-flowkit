@@ -1,5 +1,5 @@
 ---
-description: Thorough multi-agent review of an existing GitHub PR — parallel agents covering bugs, regressions, code quality, risk, test coverage, and ticket/discussion alignment. Takes ticket context inline (from /pr-review-loop) or from ticket.md, and reads lint/test/build results from the PR's CI rather than running them locally. Slower and more expensive than review-quick; use for high-risk or unusually large PRs. For your own work that has no PR yet, use /review.
+description: Thorough multi-agent review of an existing GitHub PR — parallel agents covering bugs, regressions, code quality, risk, test coverage, and ticket/discussion alignment. Reads the PR's existing inline review threads so it doesn't re-raise points a colleague already made. Takes ticket context inline (from /pr-review-loop) or from ticket.md, and reads lint/test/build results from the PR's CI rather than running them locally. Slower and more expensive than review-quick; use for high-risk or unusually large PRs. For your own work that has no PR yet, use /review.
 ---
 
 ## Role
@@ -32,15 +32,41 @@ When in doubt, classify lower. A Medium finding with a clear explanation is more
 
 ## Context to Load First
 
-Before reviewing the diff, resolve the ticket context in this order — stop at the first that applies:
+Two separate inputs: what the ticket asked for, and what has already been said on the PR. Both are needed before the diff.
 
-1. **Inline context in the invocation.** `/pr-review-loop` passes the ticket title/description (asked from the user during the loop) plus the PR's own description and discussion pulled from `gh`. When that's present, use it directly and **do not read or write `ticket.md` at all** — it may hold an unrelated ticket the user is working on, and this review must not touch it.
+### Ticket context
+
+Resolve in this order — stop at the first that applies:
+
+1. **Inline context in the invocation.** `/pr-review-loop` passes the ticket title/description, asked from the user during the loop. When that's present, use it directly and **do not read or write `ticket.md` at all** — it may hold an unrelated ticket the user is working on, and this review must not touch it.
 
 2. **`ticket.md`.** Only when nothing was passed inline. Search the repo if it's not in the root. Use it for intent, acceptance criteria, constraints, edge cases, scope.
 
-3. **Neither available.** State that plainly and continue using only the diff and visible code. Skip Agent 6 (see agent selection below) — there is nothing to align against.
+3. **Neither available.** State that plainly and continue using only the diff and visible code. Agent 6 may still have work — see agent selection below.
 
-Whichever source you use, keep the resolved context verbatim: every agent you spawn needs it pasted into its own prompt, since subagents don't inherit this conversation.
+### PR discussion
+
+If `/pr-review-loop` already passed the PR's description, inline threads, and comments inline, use those and skip the fetch. Otherwise pull them yourself:
+
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-threads.sh
+```
+
+No argument — it resolves the PR from the branch you're on. It returns `description`, `inline_threads[]`, `review_bodies[]`, and `pr_comments[]`.
+
+`inline_threads[]` is the part that used to be missing here, and it's usually the substantive half of a review. Each thread carries `path`, `line`, `is_resolved`, `is_outdated`, `authored_by_me`, the `diff_hunk` it was anchored to, and every reply. They matter to this command in three ways:
+
+- **Agent 6 judges the diff against them**, not just against the ticket. An unresolved thread is an open request the head may or may not answer.
+- **A finding that duplicates an existing thread doesn't become a new comment.** It goes in the "Already raised on this PR" section instead. Consolidation handles that split.
+- **A resolved thread is a claim, not a fact.** "Fixed in abc123" is worth checking against the code, and this is the command that has the budget to check.
+
+`gh pr view --json body,comments,reviews` is not a substitute — its `reviews[]` nodes carry only the summary body typed above the line comments, never the line comments themselves. Don't hand-roll it with `jq` against the REST comments endpoint either; that one has no resolution state.
+
+If `truncated` has any `true` in it, say so in the report — there's more discussion than one page.
+
+### Passing it on
+
+Keep everything resolved above verbatim. Every agent you spawn needs it pasted into its own prompt, since subagents don't inherit this conversation.
 
 ---
 
@@ -107,7 +133,7 @@ Produce a short internal plan before spawning agents.
 
 Six agents are defined below. Spawn all six by default, then drop any that have nothing to work on:
 
-- **No ticket context at all** (neither inline nor `ticket.md`) → drop Agent 6. There is no stated intent to check the diff against, and it would just re-derive intent from the diff it's supposed to be judging.
+- **No ticket context at all** (neither inline nor `ticket.md`) **and no unresolved inline threads** → drop Agent 6. There is no stated intent to check the diff against, and it would just re-derive intent from the diff it's supposed to be judging. If there are unresolved threads, keep it: a reviewer asking for something is a stated requirement too, and checking whether the head answers it is exactly Agent 6's job. Say in the report that it ran against the PR discussion alone.
 - **Repo has no test suite**, or the diff touches nothing a test could cover (docs, config, generated files only) → drop Agent 5.
 - **Diff is small and self-contained** — roughly under 100 changed lines in a single subsystem, no API/schema/contract surface, no auth/billing/migration paths — → run Agents 1, 2, and 6 only (and 6 only if there's ticket context, per the rule above). At that size the rest duplicate each other's reading of the same twenty lines, and the cost isn't buying coverage. Say in the report that you scaled down, and why.
 
@@ -120,7 +146,8 @@ Never drop Agent 1. Never drop an agent to save time on a diff that is large or 
 Spawn the selected agents in parallel using the **Task tool**, all in a single message.
 
 Every agent prompt must carry, verbatim:
-- The ticket context resolved above (title, description, and — when it came from `/pr-review-loop` — the PR description and discussion). Subagents inherit nothing from this conversation.
+- The ticket context resolved above (title, description) and the PR description. Subagents inherit nothing from this conversation.
+- **The inline threads**, with their paths, lines, resolved/outdated flags, and comment bodies. Agent 6 needs all of them. The other agents need them too, for a cheaper reason: an agent that doesn't know a thread exists will spend its budget rediscovering a bug someone already reported. Pass the threads as data, not as a summary — the actual words on the actual lines are what makes the match reliable.
 - The base branch / merge-base to diff against, so each agent reads the same change set.
 - The relevant CI check results (lint/build for Agent 3, tests for Agent 5).
 - The severity calibration from the top of this document.
@@ -245,11 +272,15 @@ The only agent that judges the change against what was actually asked for, rathe
 Focus on:
 - Each acceptance criterion / requirement in the ticket context: implemented, partially implemented, or missing — cite the file and line that satisfies it, or state that nothing does
 - Scope creep: changes in the diff that no part of the ticket asked for
-- Points raised in the PR discussion (when it was passed in) that the diff does not appear to answer — a reviewer asked for something and the current head doesn't show it
 - Behavior the ticket implies but the diff quietly changes (copy, defaults, ordering, permissions)
+- **Every inline thread**, one at a time, judged against the code at `HEAD`:
+  - **Unresolved** — did the head answer it? A reviewer asked for something and the current code doesn't show it is a finding. Check the replies first: an author who answered "out of scope, tracked separately" has answered it, even though the thread is still open.
+  - **Resolved** — resolution is the author's claim that it's handled. Spot-check the ones that matter (correctness, security, contracts); a thread resolved with no corresponding change in the diff is worth flagging. Skip this for nits.
+  - **Outdated** — the code moved under the comment. Find where the logic lives now and say whether the point still applies there.
+- Review summary bodies and PR conversation comments raising something the diff doesn't answer
 
 For each finding include:
-- The requirement or discussion point, quoted
+- The requirement, thread, or comment, quoted — for a thread, its `path:line` and author too
 - File path **and line number(s)** where it is (or should be) handled
 - Whether it is missing, partial, or contradicted
 - Suggested fix
@@ -270,13 +301,21 @@ Before finalising:
 - Ensure every finding carries a precise file path and line reference for the PR comment summary
 - Annotate anything that matches the review memory file, per the Review Memory section — annotate, never suppress
 
+Then split the surviving findings against `inline_threads[]`. A finding matches a thread when it's the same file, an overlapping or nearby line range, and the same underlying point — two comments on one line about different things are not a match, and a thread saying "this can be null" matches a finding saying "this can be null" even if the line drifted.
+
+- **No match** → stays in the findings sections and in the paste-ready comment summary.
+- **Match** → moves to "Already raised on this PR". It still gets written out in full, with the thread's author, line, state, and whether the head appears to address it — it just doesn't become a comment to paste, because that comment already exists on the PR.
+- **Match, but the finding is materially worse than what the thread describes** — a reviewer flagged a nit and an agent found the crash underneath it — → keep it in the findings sections *and* note which thread it extends. That's an addition to the conversation, not a duplicate.
+
+This is a different rule from the memory one deliberately. Memory is a private, lossy record of what you looked at, so a deeper pass ignores it and looks again. A thread is a live comment the author can already see; pasting a second copy of it doesn't make the point twice, it just makes the thread noisier. Either way the finding is rendered in full — nothing is dropped, only routed.
+
 ---
 
 ## Output Format
 
 ### Review Scope
 
-One line: which agents ran, which were dropped and why, and the base branch / merge-base the diff was taken against.
+One line: which agents ran, which were dropped and why, and the base branch / merge-base the diff was taken against. Add the discussion the review read against: `N inline threads (M unresolved), N review summaries, N PR comments`. Flag it here if anything came back `truncated`.
 
 ---
 
@@ -298,7 +337,8 @@ One line per check: name — pass/fail/pending. Anything not passing goes above 
 - Bullet points or "None found"
 
 **Unanswered PR discussion points:**
-- Bullet points, or omit this block entirely when no discussion was passed in
+- One bullet per open request the head doesn't answer, from Agent 6. Quote the thread or comment and cite `path:line` for inline ones. Include resolved threads whose resolution you couldn't verify in the code, marked as such.
+- Omit this block entirely when the PR has no discussion at all. If it has discussion and everything in it is answered, say "All addressed" rather than omitting — on a re-review that's the single most useful line in the report.
 
 ---
 
@@ -399,6 +439,28 @@ try {
 
 ---
 
+### Already raised on this PR
+
+Findings an existing inline thread already covers, routed here by consolidation. Plain bullets, no comment formatting, no `humanize` pass — nothing here is going on the PR.
+
+```
+- `path/to/file.ext:LINE` · _Severity_ — @author already raised this (unresolved). <What they said, and whether the head answers it.>
+```
+
+Include the thread's state (`unresolved` / `resolved` / `outdated`), and use `you` in place of `@author` for the user's own threads from an earlier round. Order by the severity of the matching finding, highest first.
+
+Omit the section when nothing matched. If the PR has no inline threads at all, say that in one line instead — on a PR back for re-review, "no inline discussion yet" is worth knowing.
+
+Example:
+
+```
+- `src/checkout.ts:88` · _Medium_ — @dana already asked about the `null` case (unresolved). Same point as Agent 1's finding; head hasn't moved since, no new comment needed.
+- `src/cart.ts:31` · _Low_ — @sam raised this, thread resolved by the author. The guard at line 34 does cover it.
+- `src/api/rates.ts:12` · _High_ — you flagged this last round (outdated, the function moved to line 47). Still unhandled there, and it's worth pushing on rather than opening a second thread.
+```
+
+---
+
 ### Overall Assessment
 
 Regression Risk: **Low / Medium / High**
@@ -428,8 +490,9 @@ Confidence Level: **Low / Medium / High**
 - Never run lint, tests, or the build — yours or an agent's. Read them from `gh`. If there is no PR, this is the wrong command: send the user to `/review`.
 - When ticket context arrives inline, never read or write `ticket.md`. It belongs to whatever the user is working on themselves.
 - Read `~/.claude/pr-review-memory/**` if it exists, never write it, never let it suppress a finding.
-- **Never post to GitHub.** No `gh pr review`, `gh pr comment`, no API POSTs. This command prints comments the user pastes themselves.
+- **Never post to GitHub.** No `gh pr review`, `gh pr comment`, no API POSTs, and no replying to or resolving an inline thread. Threads are pulled to read. This command prints comments the user pastes themselves.
+- Never hand-roll the discussion fetch. `gh pr view --json body,comments,reviews` drops every inline comment without erroring, and the REST comments endpoint has no resolution state. Use `pr-review-threads.sh`.
 - Never commit, push, or switch branches. Review whatever is checked out.
-- Base conclusions only on the diff, visible code, the resolved ticket context, and CI status.
+- Base conclusions only on the diff, visible code, the resolved ticket context, the PR discussion, and CI status.
 - State assumptions explicitly if information is missing.
 - Do not invent behavior not supported by the code.
