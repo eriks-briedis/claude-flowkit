@@ -1,5 +1,5 @@
 ---
-description: Thorough multi-agent review of an existing GitHub PR — parallel agents covering bugs, regressions, code quality, risk, test coverage, and ticket/discussion alignment. Reads the PR's existing inline review threads so it doesn't re-raise points a colleague already made. Takes ticket context inline (from /pr-review-loop) or from ticket.md, and reads lint/test/build results from the PR's CI rather than running them locally. Slower and more expensive than review-quick; use for high-risk or unusually large PRs. For your own work that has no PR yet, use /review.
+description: Thorough multi-agent review of an existing GitHub PR — parallel agents covering bugs, regressions, code quality, risk, test coverage, and ticket/discussion alignment. Reads the PR's existing inline review threads so it doesn't re-raise points a colleague already made. Takes ticket context inline (from /pr-review-loop), from ticket.md, or by looking the ticket key up in tickets/sprint.csv, and reads lint/test/build results from the PR's CI rather than running them locally. Slower and more expensive than review-quick; use for high-risk or unusually large PRs. For your own work that has no PR yet, use /review.
 ---
 
 ## Role
@@ -38,11 +38,24 @@ Two separate inputs: what the ticket asked for, and what has already been said o
 
 Resolve in this order — stop at the first that applies:
 
-1. **Inline context in the invocation.** `/pr-review-loop` passes the ticket title/description, asked from the user during the loop. When that's present, use it directly and **do not read or write `ticket.md` at all** — it may hold an unrelated ticket the user is working on, and this review must not touch it.
+1. **Inline context in the invocation.** `/pr-review-loop` passes the ticket title/description, asked from the user during the loop or resolved from the repo's sprint export. When that's present, use it directly, **do not read or write `ticket.md` at all** — it may hold an unrelated ticket the user is working on, and this review must not touch it — and skip step 3, which the loop has already done.
 
 2. **`ticket.md`.** Only when nothing was passed inline. Search the repo if it's not in the root. Use it for intent, acceptance criteria, constraints, edge cases, scope.
 
-3. **Neither available.** State that plainly and continue using only the diff and visible code. Agent 6 may still have work — see agent selection below.
+3. **`tickets/sprint.csv`.** Only when steps 1 and 2 came up empty *and* you have a ticket key. Take it from the PR title, or from `headRefName` — branch names usually carry it — matching a pattern like `[A-Z][A-Z0-9]+-\d+` rather than a hardcoded project prefix. No key, no lookup.
+
+   ```
+   ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-lookup.sh <TICKET-KEY>
+   ```
+
+   Always exits 0, always prints one JSON object, and spares you parsing a raw export by hand — those run hundreds of columns wide with commas and newlines inside quoted cells.
+
+   - `found: true` → `title` and `description`, plus `acceptance_criteria`, `type`, and `status` where the export has them. Pass `acceptance_criteria` to Agent 6 as its own field, not folded into the description: criterion-by-criterion is exactly how that agent works.
+   - `found: false` → treat as step 4, whatever `reason` says.
+
+4. **Nothing available.** State that plainly and continue using only the diff and visible code. Agent 6 may still have work — see agent selection below.
+
+Name the source of the ticket text — inline, `ticket.md`, or `tickets/sprint.csv` plus the key — in the report header. A sprint export goes stale between pulls and only the user knows whether this one has.
 
 ### PR discussion
 
@@ -121,7 +134,7 @@ Determine:
 
 ### Step 1 — Initial Analysis
 
-1. Resolve the ticket context (inline or `ticket.md`) and the CI status per the sections above
+1. Resolve the ticket context (inline, `ticket.md`, or `tickets/sprint.csv`) and the CI status per the sections above
 2. Scan the diff
 3. Identify major modified components, affected subsystems, key behavior changes
 
@@ -133,7 +146,7 @@ Produce a short internal plan before spawning agents.
 
 Six agents are defined below. Spawn all six by default, then drop any that have nothing to work on:
 
-- **No ticket context at all** (neither inline nor `ticket.md`) **and no unresolved inline threads** → drop Agent 6. There is no stated intent to check the diff against, and it would just re-derive intent from the diff it's supposed to be judging. If there are unresolved threads, keep it: a reviewer asking for something is a stated requirement too, and checking whether the head answers it is exactly Agent 6's job. Say in the report that it ran against the PR discussion alone.
+- **No ticket context at all** (nothing inline, no `ticket.md`, no sprint.csv hit) **and no unresolved inline threads** → drop Agent 6. There is no stated intent to check the diff against, and it would just re-derive intent from the diff it's supposed to be judging. If there are unresolved threads, keep it: a reviewer asking for something is a stated requirement too, and checking whether the head answers it is exactly Agent 6's job. Say in the report that it ran against the PR discussion alone.
 - **Repo has no test suite**, or the diff touches nothing a test could cover (docs, config, generated files only) → drop Agent 5.
 - **Diff is small and self-contained** — roughly under 100 changed lines in a single subsystem, no API/schema/contract surface, no auth/billing/migration paths — → run Agents 1, 2, and 6 only (and 6 only if there's ticket context, per the rule above). At that size the rest duplicate each other's reading of the same twenty lines, and the cost isn't buying coverage. Say in the report that you scaled down, and why.
 
@@ -489,6 +502,7 @@ Confidence Level: **Low / Medium / High**
 - Use the **Task tool** for parallel agents, spawned in one message.
 - Never run lint, tests, or the build — yours or an agent's. Read them from `gh`. If there is no PR, this is the wrong command: send the user to `/review`.
 - When ticket context arrives inline, never read or write `ticket.md`. It belongs to whatever the user is working on themselves.
+- Never write to `tickets/sprint.csv` either, and never edit it to "fix" a stale row.
 - Read `~/.claude/pr-review-memory/**` if it exists, never write it, never let it suppress a finding.
 - **Never post to GitHub.** No `gh pr review`, `gh pr comment`, no API POSTs, and no replying to or resolving an inline thread. Threads are pulled to read. This command prints comments the user pastes themselves.
 - Never hand-roll the discussion fetch. `gh pr view --json body,comments,reviews` drops every inline comment without erroring, and the REST comments endpoint has no resolution state. Use `pr-review-threads.sh`.

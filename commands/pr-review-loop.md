@@ -1,11 +1,11 @@
 ---
-description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull the PR description plus every inline review thread and comment from gh, ask the user only for the ticket title/description, check out the branch, and run /review-quick or the full multi-agent /review-pr
+description: Loop through GitHub PRs that need your review (new, or with new commits since your last review) — for each, pull the PR description plus every inline review thread and comment from gh, resolve the ticket from tickets/sprint.csv (asking the user only when it isn't there), check out the branch, and run /review-quick or the full multi-agent /review-pr
 argument-hint: "[quick|full] (default: quick, with a per-PR recommendation)"
 ---
 
 ## Role
 
-You are triaging the user's GitHub PR review queue in the current repository. For every open PR that genuinely needs the user's attention — either they've never reviewed it, or it has new commits since their last review — you assemble that PR's review context (PR description and discussion from `gh`, ticket title/description from the user), check out the branch locally, and run a review against it with that context passed inline.
+You are triaging the user's GitHub PR review queue in the current repository. For every open PR that genuinely needs the user's attention — either they've never reviewed it, or it has new commits since their last review — you assemble that PR's review context (PR description and discussion from `gh`, ticket title/description from `tickets/sprint.csv` or, failing that, from the user), check out the branch locally, and run a review against it with that context passed inline.
 
 Two review depths are available per PR:
 
@@ -67,6 +67,19 @@ State the PR number, title, URL, and why it's in the queue (new / updated).
 
 Extract a Jira-style ticket key from the PR title using a pattern like `[A-Z][A-Z0-9]+-\d+` (e.g. `ABC-1234`) — don't hardcode a specific project prefix, infer it from what's actually in the title. If none is found there, check `headRefName` (branch names often carry it, e.g. `bugfix/xy/ABC-1234-short-description`). If the team doesn't use Jira-style keys at all, or still nothing is found, ask the user for the ticket reference directly — do not guess.
 
+With a key in hand, try the repo's sprint export before planning to ask the user for anything:
+
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/ticket-lookup.sh <TICKET-KEY>
+```
+
+It reads `tickets/sprint.csv` (a Jira CSV export, or anything with comparable columns), always exits 0, and always prints one JSON object. Don't parse the file yourself — a real export runs hundreds of columns wide with commas and newlines inside quoted description cells.
+
+- `found: true` → you already have what 2f would have asked for: `title`, `description`, and, where the export carries them, `acceptance_criteria`, `type`, and `status`. Carry all of them forward. Keep `acceptance_criteria` as its own field rather than pasting it into the description — the alignment agent works criterion by criterion.
+- `found: false` → nothing is wrong; 2f asks the user as before. Don't report the `reason` to them unless they ask why it didn't resolve.
+
+Do this per PR, inside the loop. Each iteration is a different key, and a hit on one says nothing about the next.
+
 ### 2c. Fetch PR description and discussion from GitHub
 
 `gh` already has this — don't ask the user for it:
@@ -123,9 +136,22 @@ Otherwise recommend **quick**. Small, single-subsystem PRs are exactly what quic
 
 State the recommendation in one line with the reason, e.g. `→ suggesting full: 640 changed lines across 23 files, touches src/auth/`.
 
-### 2f. Ask the user for the ticket title/description and confirm the depth
+### 2f. Ask for whatever 2b didn't already resolve, and confirm the depth
 
-The only thing not visible to `gh` is the Jira-side ask — what the ticket actually wants. Ask for just that plus the depth confirmation, in one message, nothing more. Restate the PR number and URL (from 2a) right above the ask so the user can pull the ticket up without scrolling back:
+**When 2b resolved the ticket from `tickets/sprint.csv`**, the only open question is the depth. Ask that alone — re-asking for a title and description you're already holding is exactly the interruption this lookup exists to remove:
+
+```
+#<number> — <url>
+<one-line size/risk summary from 2e>
+
+ABC-1234 — <title from 2b>   (tickets/sprint.csv)
+
+Review depth: [quick] / full   ← suggesting <quick|full> because <reason>
+```
+
+Echo the key and title back on that one line. It's how the user catches a stale export or a branch carrying the wrong key, and it costs them nothing to read. If they say the ticket text is wrong or out of date, take what they give you instead and move on — don't edit the CSV.
+
+**Otherwise**, the Jira-side ask is the one thing not visible to `gh`. Ask for it plus the depth confirmation, in one message, nothing more. Restate the PR number and URL (from 2a) right above the ask so the user can pull the ticket up without scrolling back:
 
 ```
 #<number> — <url>
@@ -137,7 +163,7 @@ Description:
 Review depth: [quick] / full   ← suggesting <quick|full> because <reason>
 ```
 
-Wait for the reply — do not fabricate or infer the ticket content, and do not pick the depth for them when they've answered with only the ticket text. If they give the ticket and say nothing about depth, take the recommendation and say which one you're running.
+Either way, wait for the reply — do not fabricate or infer ticket content the lookup didn't return, and do not pick the depth for them when they've answered with only the ticket text. If they give the ticket and say nothing about depth, take the recommendation and say which one you're running.
 
 ### 2g. Hand the assembled context to the review — skip `ticket.md` entirely
 
@@ -145,7 +171,7 @@ Do **not** read or write `ticket.md` for this loop. It may hold unrelated contex
 
 Pass the assembled context straight into the review invocation in 2h, inline in the same turn — no file round-trip:
 
-- ticket Title/Description from 2f
+- ticket Title/Description, from the 2b lookup or the 2f reply — plus `acceptance_criteria`, `type`, and `status` when the lookup returned them, each as its own labelled field. State which source it came from (`tickets/sprint.csv` and the key, or the user) so the review can put that in its report.
 - `description`, `review_bodies`, and `pr_comments` from 2c
 - **`inline_threads` from 2c, verbatim** — each one with its `path`, `line`, resolved/outdated flags, and comment bodies. Don't summarise them down to a sentence: the review needs the actual words on the actual lines to tell "this was already raised" from "this is new." Both review commands know to skip their own fetch when this arrives inline, so dropping it here means it never gets read at all.
 
@@ -187,8 +213,8 @@ When the loop ends (list exhausted or user stops early):
 
 - Never run `gh pr review`, `gh pr comment`, `git push`, `git commit`, or `gh pr create` as part of this loop. Replying to or resolving an existing inline thread counts as posting — the threads are pulled to read, never to answer.
 - Never stash, commit, or discard uncommitted work when switching branches — if the working tree is dirty, stop and tell the user.
-- Never invent ticket content the user hasn't provided.
-- Never read or write `ticket.md` — ticket context is asked for in 2f and passed inline, every iteration.
+- Never invent ticket content — it comes from the sprint export in 2b or from the user in 2f, and from nowhere else.
+- Never read or write `ticket.md` — ticket context is resolved in 2b/2f and passed inline, every iteration. `tickets/sprint.csv` is read-only too.
 - Never run the project's lint, test, or build commands. Lint/test/build status comes from the PR's CI, via the review command.
 - Never skip the pause in 2i, even if the user seems eager to move fast — confirm each time.
 - Never escalate a PR to full depth without asking, and never quietly downgrade a PR the user asked to review at full depth.

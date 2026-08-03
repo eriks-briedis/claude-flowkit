@@ -52,18 +52,31 @@ Resolve in this order, stopping at the first that applies:
 
 1. **Ticket context passed inline with the invocation** — use it as-is.
 2. **`ticket.md`** — search the repo if it isn't in the root. Use it for intent, acceptance criteria, constraints, edge cases, scope. This is the normal case for this command: `ticket.md` here is the user's *own* ticket, the one they're implementing, so reading it is expected.
-3. **Neither** — ask once, in a single short prompt:
+3. **`tickets/sprint.csv`** — a sprint export checked into the repo, when there's a ticket key to look it up with. Take the key from the current branch name (`bugfix/xy/ABC-1234-short-description`) or from what the user said, matching something like `[A-Z][A-Z0-9]+-\d+` — infer the project prefix from what's actually there, don't hardcode one. No key means skip this step; never scan the file speculatively.
 
    ```
-   No ticket.md found. Paste the ticket so I can check the diff against it, or say "skip" to review the code on its own.
+   ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-lookup.sh <TICKET-KEY>
+   ```
+
+   Always exits 0, always prints one JSON object. Don't parse the CSV yourself — it's a raw export, potentially hundreds of columns wide, with commas and newlines inside quoted cells.
+
+   - `found: true` → `title` and `description`, plus `acceptance_criteria`, `type`, and `status` when the export carries those columns. Keep `acceptance_criteria` separate from `description` rather than merging them; it's the sharpest input Agent 6 gets.
+   - `found: false` → fall through to step 4, whatever `reason` says. A missing file, an absent key, and a malformed CSV all mean the same thing here: ask.
+
+4. **Nothing found** — ask once, in a single short prompt:
+
+   ```
+   No ticket.md, and ABC-1234 isn't in tickets/sprint.csv. Paste the ticket so I can check the diff against it, or say "skip" to review the code on its own.
 
    Title:
    Description:
    ```
 
-   If they skip, continue with the diff and visible code alone, say so in the report, and drop the alignment agent — there is nothing to align against.
+   Drop the sprint.csv clause when there was no key or no CSV to check. If they skip, continue with the diff and visible code alone, say so in the report, and drop the alignment agent — there is nothing to align against.
 
-Never write to `ticket.md`. Read it, don't manage it.
+Never write to `ticket.md` or `tickets/sprint.csv`. Read them, don't manage them.
+
+Say which source the text came from — inline, `ticket.md`, `tickets/sprint.csv` (name the key), or the user — in one line before the findings. A sprint export can be weeks stale, and the user is the only one who can tell.
 
 Keep the resolved context verbatim. Every agent you spawn needs it pasted into its own prompt, since subagents inherit nothing from this conversation.
 
@@ -134,7 +147,7 @@ Report these as a checklist, not as agent findings. Each line: file path, line n
 
 Six agents are defined below. Spawn all six by default, then drop any with nothing to work on:
 
-- **No ticket context** (none inline, no `ticket.md`, user skipped) → drop Agent 6.
+- **No ticket context** (none inline, no `ticket.md`, no sprint.csv hit, user skipped) → drop Agent 6.
 - **Repo has no test suite**, or the change set touches nothing a test could cover (docs, config, generated files only) → drop Agent 5.
 - **Change set is small and self-contained** — roughly under 100 changed lines in a single subsystem, no API/schema/contract surface, no auth/billing/migration paths → run Agents 1, 2, and 6 only (6 only if there's ticket context). At that size the rest re-read the same twenty lines. Say in the report that you scaled down, and why.
 
@@ -403,7 +416,7 @@ Ordered list of what to do before opening the PR, blockers first. Then offer, in
 - Use the **Task tool** for parallel agents, spawned in one message.
 - Run lint, tests, and build **once, in the orchestrator, before spawning agents** — never inside an agent, never more than once.
 - Never edit, commit, amend, stash, push, or create a PR. Offer fixes at the end and wait for the user to say yes.
-- Never write to `ticket.md`.
+- Never write to `ticket.md` or `tickets/sprint.csv`.
 - Never render findings as paste-ready GitHub PR comments, and never run them through `humanize`. There is no PR and no reviewer here — that output format belongs to `/review-pr` and `/review-quick`. Write findings as direct notes to the person who wrote the code.
 - Never post anything to GitHub. This command doesn't need `gh` at all beyond checking whether a PR already exists.
 - Base conclusions only on the change set, visible code, ticket context, and the local check output.

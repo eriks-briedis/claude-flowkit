@@ -1,5 +1,5 @@
 ---
-description: Fast single-pass code review against ticket.md. Uses CI status instead of re-running lint/tests locally, reads the PR's existing inline review threads so it doesn't re-raise points already made, prints findings pre-formatted as copy/paste-ready GitHub PR comments (never posts them itself), and remembers across passes which findings you chose not to comment on so they aren't re-flagged unless they get worse
+description: Fast single-pass code review against the ticket, resolved from inline context, ticket.md, or a ticket-key lookup in tickets/sprint.csv. Uses CI status instead of re-running lint/tests locally, reads the PR's existing inline review threads so it doesn't re-raise points already made, prints findings pre-formatted as copy/paste-ready GitHub PR comments (never posts them itself), and remembers across passes which findings you chose not to comment on so they aren't re-flagged unless they get worse
 ---
 
 ## Role
@@ -35,11 +35,20 @@ Two separate things: what the ticket asked for, and what has already been said o
 
 ### Ticket context
 
-1. If the invocation already included ticket context inline (e.g. `/pr-review-loop` passes ticket title/description), use that directly — do not also read or write `ticket.md` in this case.
+1. If the invocation already included ticket context inline (e.g. `/pr-review-loop` passes ticket title/description), use that directly — do not also read or write `ticket.md` in this case, and skip the sprint.csv lookup below: the loop has already done it.
 2. Otherwise, locate and read `ticket.md`.
    - Search the repo if not in root.
    - Use it to understand intent, acceptance criteria, constraints, edge cases, scope.
-3. If neither inline context nor `ticket.md` is available, state that and continue using only the diff and visible code.
+3. Still nothing, and you have a ticket key — from the PR title or the branch name, matched loosely as `[A-Z][A-Z0-9]+-\d+` rather than against a hardcoded project prefix — look it up in the repo's sprint export:
+
+   ```
+   ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-lookup.sh <TICKET-KEY>
+   ```
+
+   Reads `tickets/sprint.csv` by default, always exits 0, always prints one JSON object. `found: true` carries `title` and `description`, plus `acceptance_criteria`, `type`, and `status` when the export has those columns — keep the criteria separate from the description, they're what the alignment section below is checked against. `found: false` means move to step 4. Don't parse the CSV by hand, and don't run this at all without a key.
+4. If none of those produced anything, state that and continue using only the diff and visible code.
+
+Say which source the ticket text came from — inline, `ticket.md`, or `tickets/sprint.csv` with the key — in one line above the findings. Never write to either file.
 
 ### PR discussion
 
@@ -123,11 +132,11 @@ Shape of the file:
 
 Review the current branch against its base branch in a single pass — **no subagents, no Task-tool spawning.**
 
-Check the diff against `ticket.md`'s intent and acceptance criteria, then look for, in priority order:
+Check the diff against the resolved ticket context's intent and acceptance criteria, then look for, in priority order:
 1. Logic errors, unhandled edge cases, null/undefined risks, async ordering, silent failure paths
 2. Regressions vs. previous behavior — contract changes, default/config changes, compatibility breaks
 3. Security/risk issues — unvalidated input, weakened error handling, missing auth checks
-4. Test coverage gaps against `ticket.md` behavior
+4. Test coverage gaps against the behavior the ticket context describes
 
 Skip pure style, naming, or duplication commentary unless it's severe enough to obscure correctness — that's out of scope for quick mode. The budget saved by skipping style/lint/tests goes into the three techniques below, not into skimming faster — a shallow pass on a narrow diff still misses real bugs.
 
