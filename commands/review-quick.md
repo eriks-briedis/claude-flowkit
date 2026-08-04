@@ -75,7 +75,9 @@ If the script fails because there's no PR for this branch, you're in the wrong c
 
 ## CI Status Check
 
-Before touching the diff, pull the PR's CI results instead of re-running anything locally:
+If CI results were passed inline with the invocation — `/pr-review-parallel` resolves them once in its parent and hands them to every agent — use those and skip this fetch, exactly as with ticket context and PR discussion above.
+
+Otherwise, before touching the diff, pull the PR's CI results instead of re-running anything locally:
 
 ```
 gh pr view --json statusCheckRollup --jq '.statusCheckRollup[] | "\(.name): \(.conclusion // .status)"'
@@ -91,7 +93,9 @@ Report every check's status up front. If the repo's test/lint check is failing o
 
 This command remembers, per PR, which findings you chose to post as comments and which you saw but deliberately left uncommented — so a re-review after a fix doesn't re-flag something you already decided wasn't worth raising.
 
-Resolve the memory file path for this PR:
+If the memory file's contents were passed inline, use them for the reconciliation below and **do not write the file** — skip the path resolution here and the whole "Record This Pass's Decisions" section at the end. The caller owns the write because the caller owns the question it records; you are not the one who will be told which findings got posted. Return your findings and stop there.
+
+Otherwise, resolve the memory file path for this PR:
 
 ```
 gh repo view --json owner,name --jq '"\(.owner.login)__\(.name)"'

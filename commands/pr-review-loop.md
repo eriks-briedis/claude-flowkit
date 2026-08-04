@@ -18,6 +18,8 @@ Both take the ticket context inline and both read lint/test/build results from t
 
 This command only works from inside a git repo with `gh` authenticated against the relevant GitHub remote.
 
+`/pr-review-parallel` covers the same queue concurrently: every PR gets its own git worktree, the questions are batched around the fan-out instead of asked per PR, and your working tree is never checked out or switched. Prefer it when the queue is long or the working tree is dirty. Stay here when you want the size/depth conversation per PR, or want to stop after the first one or two.
+
 ---
 
 ## Invocation
@@ -103,7 +105,7 @@ If `truncated` has any `true` in it, say so when you present the findings — th
 
 Do this before asking the user anything, so the sizing check in 2e has a real diff to look at and the user is only interrupted once.
 
-Before switching branches, run `git status`. If the working tree has uncommitted changes, **stop the entire loop and tell the user** — do not stash, commit, or discard anything on their behalf. Let them clean up and re-run the command.
+Before switching branches, run `git status`. If the working tree has uncommitted changes, **stop the entire loop and tell the user** — do not stash, commit, or discard anything on their behalf. Let them clean up and re-run the command, or point them at `/pr-review-parallel`, which reviews in per-PR worktrees and doesn't care what's uncommitted. That's the one thing worth saying at this stop, because cleaning up is otherwise the only way forward.
 
 Record the branch you started on if this is the first PR in the loop, so it can be restored at the end.
 

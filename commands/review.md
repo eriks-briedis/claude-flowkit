@@ -21,7 +21,8 @@ This command reviews and reports. It does not edit code unless the user asks aft
 | Your own branch, no PR open yet, possibly uncommitted work | **this one** |
 | Same, but you want the findings triaged and fixed, not just listed | `/review-and-fix` |
 | An open GitHub PR (usually someone else's) | `/review-pr` |
-| Triaging a queue of PRs that need your review | `/pr-review-loop` |
+| Triaging a queue of PRs that need your review, one at a time | `/pr-review-loop` |
+| Same queue, reviewed concurrently in per-PR worktrees | `/pr-review-parallel` |
 
 If the current branch already has an open PR (`gh pr view` succeeds), say so once and ask whether the user wants `/review-pr` instead — that path gets CI results and the discussion for free. If they'd rather stay here, continue; pre-PR review of a pushed branch is still perfectly valid.
 

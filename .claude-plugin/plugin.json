@@ -1,7 +1,7 @@
 {
   "name": "flowkit",
-  "description": "Shared Claude Code toolkit for AI-assisted engineering: preflight specs for underspecified tasks, pre-PR self-review that runs the checks locally and fixes what's worth fixing, PR review triage and loops, single-pass and multi-agent code review, addressing reviewer feedback on your own PRs, comment cleanup, and humanized user-facing output.",
-  "version": "0.7.0",
+  "description": "Shared Claude Code toolkit for AI-assisted engineering: preflight specs for underspecified tasks, pre-PR self-review that runs the checks locally and fixes what's worth fixing, PR review triage in serial loops or in parallel across git worktrees, single-pass and multi-agent code review, addressing reviewer feedback on your own PRs, comment cleanup, and humanized user-facing output.",
+  "version": "0.8.0",
   "author": {
     "name": "Eriks Briedis",
     "email": "eriks.briedis@gmail.com"
